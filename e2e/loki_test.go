@@ -58,6 +58,12 @@ func TestLokiKnownAnswers(t *testing.T) {
 	if s.Total != 28 || s.Killed != 22 || s.TimedOut != 2 || s.OOM != 0 || s.Survived != 3 || s.NotViable != 1 || s.Allowlisted != 5 {
 		t.Fatalf("unexpected summary: %+v", s)
 	}
+	human := executeOutput(t, binary, fixture, "--concurrency", "2")
+	for _, want := range []string{"meaning: this bug was injected", "meaning: this mutation made the tests hang", "duration:", "next actions:", "not viable: 1", "allowlisted (still run", "slowest mutants:", strings.Repeat("-", 80)} {
+		if !strings.Contains(human, want) {
+			t.Errorf("human report does not contain %q", want)
+		}
+	}
 	selected, code := execute(t, binary, fixture, "--json", "--concurrency", "2", "--only", regexp.QuoteMeta(survivedKey))
 	if code != 1 || selected.Summary.Total != 1 {
 		t.Fatalf("survivor selection: code=%d summary=%+v", code, selected.Summary)
@@ -70,6 +76,19 @@ func TestLokiKnownAnswers(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("recursive pattern exit = %d, want 2", code)
 	}
+}
+
+func executeOutput(t *testing.T, binary, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "LOKI_TEST_TIMEOUT_SECONDS=5")
+	output, err := cmd.Output()
+	var exit *exec.ExitError
+	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() != 1) {
+		t.Fatalf("execute human report: %v", err)
+	}
+	return string(output)
 }
 
 func execute(t *testing.T, binary, dir string, args ...string) (report, int) {

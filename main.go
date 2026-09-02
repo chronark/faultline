@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/chronark/loki/internal/mutate"
 	"github.com/chronark/loki/internal/report"
@@ -68,25 +69,41 @@ func runCLI(arguments []string) int {
 		return 2
 	}
 	timeout := run.Timeout(baseline)
-	writer.Phase("baseline passed in %s; mutant timeout %s", baseline, timeout)
-	mutants, notes, err := mutate.Enumerate(root, packages, *only)
+	writer.Phase("baseline passed in %s; mutant timeout %s (5x baseline, min 30s)", baseline.Round(100*time.Millisecond), timeout)
+	mutants, notes, err := mutate.Enumerate(root, packages, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	writer.Phase("enumerated %d mutants across %d packages", len(mutants), len(packages))
 	for _, note := range notes {
 		writer.Phase("not viable: %s: %s", note.Key, note.Message)
+	}
+	if *only != "" {
+		pattern := regexp.MustCompile(*only)
+		filtered := mutants[:0]
+		for _, mutant := range mutants {
+			if pattern.MatchString(mutant.Key()) {
+				filtered = append(filtered, mutant)
+			}
+		}
+		mutants = filtered
+		writer.Phase("filtered to %d mutants with --only %q", len(mutants), *only)
 	}
 	workers := *concurrency
 	if workers == 0 {
 		workers = run.AutoConcurrency(runtime.NumCPU(), run.TotalMemory())
+		writer.Phase("testing %d mutants with concurrency %d (auto: %d cpus, %d GiB memory)...", len(mutants), workers, runtime.NumCPU(), run.TotalMemory()>>30)
+	} else {
+		writer.Phase("testing %d mutants with concurrency %d (flag)...", len(mutants), workers)
 	}
-	writer.Phase("testing %d mutants with concurrency %d...", len(mutants), workers)
+	executionStarted := time.Now()
 	results, err := run.Execute(root, mutants, workers, timeout, func(done int, result run.Result) { writer.Progress(done, len(mutants), result) })
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	writer.Phase("finished %d mutants in %s", len(mutants), time.Since(executionStarted).Round(100*time.Millisecond))
 	findings, err := writer.Final(packages, workers, timeout, results)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

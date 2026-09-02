@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -131,22 +132,61 @@ func build(packages []string, workers int, timeout time.Duration, results []run.
 func human(w io.Writer, data jsonReport) {
 	for _, r := range data.Mutants {
 		if !r.Allowlisted && (r.Status == string(run.Survived) || r.Status == string(run.TimedOut) || r.Status == string(run.OOM)) {
-			fmt.Fprintf(w, "%s: %s:%d:%d  %s\nfunction: %s\nkey: %s\n\n%s\n\ncontext:\n%s\nreproduce: %s\n\n", r.Status, r.File, r.Line, r.Column, r.Mutation, r.Function, r.Key, r.Diff, r.Context, r.Reproduce)
+			fmt.Fprintln(w, strings.Repeat("-", 80))
+			start, end := contextBounds(r.Context)
+			fmt.Fprintf(w, "%s: %s:%d:%d  %s\nfunction: %s\nkey: %s\n\n%s\n\ncontext (%s:%d-%d):\n%s\nreproduce: %s\n", r.Status, r.File, r.Line, r.Column, r.Mutation, r.Function, r.Key, r.Diff, r.File, start, end, r.Context, r.Reproduce)
+			if r.Status == string(run.TimedOut) || r.Status == string(run.OOM) {
+				fmt.Fprintf(w, "duration: %s\n", (time.Duration(r.DurationMs) * time.Millisecond).Round(time.Millisecond))
+			}
+			switch r.Status {
+			case string(run.OOM):
+				fmt.Fprintln(w, "meaning: this mutation made the tests allocate until the kernel killed the process. The code path has no bound on memory growth. Add an explicit size limit so a broken guard fails fast.")
+			case string(run.TimedOut):
+				fmt.Fprintln(w, "meaning: this mutation made the tests hang. Add an explicit iteration limit or progress check so a broken guard fails fast.")
+			default:
+				fmt.Fprintln(w, "meaning: this bug was injected and the test suite still passed. Add a test that fails under the mutated line, or add a justified //loki:equivalent marker.")
+			}
 		}
 	}
-	fmt.Fprintf(w, "Summary:\n  total: %d\n  killed: %d\n  timed out: %d\n  oom: %d\n  survived: %d\n  not viable: %d\n  allowlisted: %d\n  score: %.2f%%\n", data.Summary.Total, data.Summary.Killed, data.Summary.TimedOut, data.Summary.OOM, data.Summary.Survived, data.Summary.NotViable, data.Summary.Allowlisted, 100*data.Summary.Score)
+	fmt.Fprintf(w, "not viable: %d\n", data.Summary.NotViable)
+	fmt.Fprintf(w, "\nSummary:\n  total: %d\n  killed: %d\n  timed out: %d\n  oom: %d\n  survived: %d\n  allowlisted: %d\n  score: %.2f%% (killed + timed out + oom) / (total - not viable)\n", data.Summary.Total, data.Summary.Killed, data.Summary.TimedOut, data.Summary.OOM, data.Summary.Survived, data.Summary.Allowlisted, 100*data.Summary.Score)
 	if data.Summary.Allowlisted > 0 {
-		fmt.Fprintln(w, "\nallowlisted (still executed):")
+		fmt.Fprintln(w, "\nallowlisted (still run, not counted as findings):")
 		for _, r := range data.Mutants {
 			if r.Allowlisted {
 				status := r.Status
 				if status == string(run.Killed) {
 					status = "KILLED (marker is stale, remove it)"
 				}
-				fmt.Fprintf(w, "%s  %s: %s\n", r.Key, status, r.AllowlistReason)
+				fmt.Fprintf(w, "%s:%d:%d  %s  %s: %s\n", r.File, r.Line, r.Column, r.Key, status, r.AllowlistReason)
 			}
 		}
 	}
+	if len(data.Mutants) >= 2 {
+		slowest := append([]mutantRecord(nil), data.Mutants...)
+		sort.SliceStable(slowest, func(i, j int) bool { return slowest[i].DurationMs > slowest[j].DurationMs })
+		fmt.Fprintln(w, "\nslowest mutants:")
+		for _, r := range slowest[:min(5, len(slowest))] {
+			fmt.Fprintf(w, "%s  %s  %s:%d:%d  %s\n", (time.Duration(r.DurationMs) * time.Millisecond).Round(time.Millisecond), r.Status, r.File, r.Line, r.Column, r.Mutation)
+		}
+	}
+	if data.Summary.TimedOut > 0 {
+		fmt.Fprintln(w, "timed out: reproduce each timeout and add an explicit iteration limit or progress check.")
+	}
+	fmt.Fprintln(w, "\nnext actions:")
+	fmt.Fprintln(w, "- Add a test for each SURVIVED mutant.")
+	fmt.Fprintln(w, "- Add an explicit bound for each TIMED OUT or OOM mutant.")
+	fmt.Fprintln(w, "- Add //loki:equivalent <reason> only when a mutant is observably equivalent.")
+}
+
+func contextBounds(context string) (int, int) {
+	lines := strings.Split(context, "\n")
+	var start, end int
+	if len(lines) > 0 {
+		fmt.Sscanf(lines[0], "%d", &start)
+		fmt.Sscanf(lines[len(lines)-1], "%d", &end)
+	}
+	return start, end
 }
 
 func reproduce(packages []string, key string) string {
@@ -167,9 +207,10 @@ func bounds(m mutate.Mutant) (int, int) {
 func sourceContext(m mutate.Mutant) string {
 	lines := splitLines(m.OriginalSource())
 	start, end := bounds(m)
+	width := len(fmt.Sprint(end))
 	var b strings.Builder
 	for line := start; line <= end; line++ {
-		fmt.Fprintf(&b, "%d\t%s\n", line, lines[line-1])
+		fmt.Fprintf(&b, "%*d\t%s\n", width, line, lines[line-1])
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
