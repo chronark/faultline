@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/chronark/placebo/internal/mutate"
@@ -15,9 +18,14 @@ import (
 	"github.com/chronark/placebo/internal/run"
 )
 
-func main() { os.Exit(runCLI(os.Args[1:])) }
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(runCLI(ctx, os.Args[1:]))
+}
 
-func runCLI(arguments []string) int {
+// runCLI returns 0 for success, 1 for findings, and 2 for incomplete runs or errors.
+func runCLI(ctx context.Context, arguments []string) int {
 	flags := flag.NewFlagSet("placebo", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	flags.Usage = func() {
@@ -41,12 +49,6 @@ func runCLI(arguments []string) int {
 	if len(packages) == 0 {
 		packages = []string{"."}
 	}
-	for _, pkg := range packages {
-		if strings.Contains(pkg, "...") {
-			fmt.Fprintln(os.Stderr, "package patterns containing ... are not supported; list packages explicitly")
-			return 2
-		}
-	}
 	if *concurrency < 0 {
 		fmt.Fprintln(os.Stderr, "--concurrency must be non-negative")
 		return 2
@@ -62,20 +64,61 @@ func runCLI(arguments []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	listed, err := run.ListPackages(ctx, root, packages)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
 	writer.Phase("running baseline tests (go test %s)...", strings.Join(packages, " "))
-	baseline, err := run.Baseline(root, packages)
+	baselineStarted := time.Now()
+	packageResults, err := run.Baseline(ctx, root, listed)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	timeout := run.Timeout(baseline)
-	writer.Phase("baseline passed in %s; mutant timeout %s (5x baseline, min 30s)", baseline.Round(100*time.Millisecond), timeout)
-	mutants, notes, err := mutate.Enumerate(root, packages, "")
+	var okPackages []string
+	timeouts := make(map[string]time.Duration)
+	var timeoutMin, timeoutMax time.Duration
+	untested, failed := 0, 0
+	for _, pkg := range packageResults {
+		switch pkg.Status {
+		case run.BaselineOK:
+			okPackages = append(okPackages, pkg.Dir)
+			timeout := run.Timeout(pkg.Baseline)
+			timeouts[pkg.Dir] = timeout
+			if timeoutMin == 0 || timeout < timeoutMin {
+				timeoutMin = timeout
+			}
+			if timeout > timeoutMax {
+				timeoutMax = timeout
+			}
+		case run.BaselineUntested:
+			untested++
+		case run.BaselineFailed:
+			failed++
+		}
+	}
+	if len(okPackages) == 0 {
+		fmt.Fprintf(os.Stderr, "no packages have a passing baseline (%d without tests, %d failed)\n", untested, failed)
+		return 2
+	}
+	timeoutRange := timeoutMin.String()
+	if timeoutMin != timeoutMax {
+		timeoutRange += ".." + timeoutMax.String()
+	}
+	writer.Phase("baseline passed for %d packages in %s; mutant timeout per package %s (5x baseline, min 30s)", len(okPackages), time.Since(baselineStarted).Round(100*time.Millisecond), timeoutRange)
+	if untested > 0 {
+		writer.Phase("skipping %d packages without tests", untested)
+	}
+	if failed > 0 {
+		writer.Phase("skipping %d packages whose baseline failed", failed)
+	}
+	mutants, notes, err := mutate.Enumerate(root, okPackages, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	writer.Phase("enumerated %d mutants across %d packages", len(mutants), len(packages))
+	writer.Phase("enumerated %d mutants across %d packages", len(mutants), len(okPackages))
 	for _, note := range notes {
 		writer.Phase("not viable: %s: %s", note.Key, note.Message)
 	}
@@ -93,24 +136,47 @@ func runCLI(arguments []string) int {
 	workers := *concurrency
 	if workers == 0 {
 		workers = run.AutoConcurrency(runtime.NumCPU(), run.TotalMemory())
+	}
+	estimate := roughEstimate(mutants, packageResults, workers)
+	writer.Phase("rough estimate: ~%s at concurrency %d", estimate, workers)
+	if *concurrency == 0 {
 		writer.Phase("testing %d mutants with concurrency %d (auto: %d cpus, %d GiB memory)...", len(mutants), workers, runtime.NumCPU(), run.TotalMemory()>>30)
 	} else {
 		writer.Phase("testing %d mutants with concurrency %d (flag)...", len(mutants), workers)
 	}
 	executionStarted := time.Now()
-	results, err := run.Execute(root, mutants, workers, timeout, func(done int, result run.Result) { writer.Progress(done, len(mutants), result) })
+	results, interrupted, err := run.Execute(ctx, root, mutants, workers, timeouts, func(done int, result run.Result) { writer.Progress(done, len(mutants), result) })
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	writer.Phase("finished %d mutants in %s", len(mutants), time.Since(executionStarted).Round(100*time.Millisecond))
-	findings, err := writer.Final(packages, workers, timeout, results)
+	writer.Phase("finished %d mutants in %s", len(results), time.Since(executionStarted).Round(100*time.Millisecond))
+	findings, err := writer.Final(packageResults, workers, results, interrupted)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if failed > 0 || interrupted > 0 {
 		return 2
 	}
 	if findings {
 		return 1
 	}
 	return 0
+}
+
+func roughEstimate(mutants []mutate.Mutant, packages []run.Package, workers int) time.Duration {
+	baselineByDir := make(map[string]time.Duration, len(packages))
+	for _, pkg := range packages {
+		baselineByDir[pkg.Dir] = pkg.Baseline
+	}
+	var estimate time.Duration
+	for _, mutant := range mutants {
+		estimate += baselineByDir[mutant.PackagePath()] + 2*time.Second
+	}
+	estimate /= time.Duration(workers)
+	if estimate < 2*time.Minute {
+		return estimate.Round(time.Second)
+	}
+	return estimate.Round(time.Minute)
 }

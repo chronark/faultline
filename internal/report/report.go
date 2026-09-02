@@ -1,4 +1,3 @@
-// Package report owns both output streams so JSON output cannot be corrupted by progress.
 package report
 
 import (
@@ -22,14 +21,17 @@ type Writer struct {
 
 // Summary makes aggregate outcomes stable for CI and coding-agent consumers.
 type Summary struct {
-	Total       int     `json:"total"`
-	Killed      int     `json:"killed"`
-	TimedOut    int     `json:"timedOut"`
-	OOM         int     `json:"oom"`
-	Survived    int     `json:"survived"`
-	NotViable   int     `json:"notViable"`
-	Allowlisted int     `json:"allowlisted"`
-	Score       float64 `json:"score"`
+	Total              int     `json:"total"`
+	Killed             int     `json:"killed"`
+	TimedOut           int     `json:"timedOut"`
+	OOM                int     `json:"oom"`
+	Survived           int     `json:"survived"`
+	NotViable          int     `json:"notViable"`
+	Allowlisted        int     `json:"allowlisted"`
+	UntestedPackages   int     `json:"untestedPackages,omitempty"`
+	BaselineFailed     int     `json:"baselineFailed,omitempty"`
+	InterruptedMutants int     `json:"interrupted,omitempty"`
+	Score              float64 `json:"score"`
 }
 type mutantRecord struct {
 	Status          string `json:"status"`
@@ -50,11 +52,23 @@ type mutantRecord struct {
 	Reason          string `json:"reason,omitempty"`
 }
 type jsonReport struct {
-	Packages    []string       `json:"packages"`
-	Concurrency int            `json:"concurrency"`
-	Timeout     string         `json:"timeout"`
-	Summary     Summary        `json:"summary"`
-	Mutants     []mutantRecord `json:"mutants"`
+	Packages         []packageRecord        `json:"packages"`
+	UntestedPackages []string               `json:"untestedPackages"`
+	BaselineFailed   []baselineFailedRecord `json:"baselineFailed"`
+	Interrupted      bool                   `json:"interrupted"`
+	Concurrency      int                    `json:"concurrency"`
+	Summary          Summary                `json:"summary"`
+	Mutants          []mutantRecord         `json:"mutants"`
+}
+type packageRecord struct {
+	Package    string `json:"package"`
+	BaselineMs int64  `json:"baselineMs"`
+	TimeoutMs  int64  `json:"timeoutMs"`
+	Mutants    int    `json:"mutants"`
+}
+type baselineFailedRecord struct {
+	Package string `json:"package"`
+	Output  string `json:"output"`
 }
 
 // New prevents terminal-only diagnostics from leaking into redirected output.
@@ -73,8 +87,8 @@ func (w *Writer) Progress(done, total int, result run.Result) {
 }
 
 // Final emits one complete report and returns whether unallowlisted findings remain.
-func (w *Writer) Final(packages []string, workers int, timeout time.Duration, results []run.Result) (bool, error) {
-	data := build(packages, workers, timeout, results)
+func (w *Writer) Final(packages []run.Package, workers int, results []run.Result, interrupted int) (bool, error) {
+	data := build(packages, workers, results, interrupted)
 	if w.jsonMode {
 		encoder := json.NewEncoder(w.stdout)
 		encoder.SetIndent("", "  ")
@@ -92,8 +106,22 @@ func (w *Writer) Final(packages []string, workers int, timeout time.Duration, re
 	return false, nil
 }
 
-func build(packages []string, workers int, timeout time.Duration, results []run.Result) jsonReport {
-	data := jsonReport{Packages: packages, Concurrency: workers, Timeout: timeout.String(), Mutants: make([]mutantRecord, 0, len(results))}
+func build(packages []run.Package, workers int, results []run.Result, interrupted int) jsonReport {
+	data := jsonReport{Packages: make([]packageRecord, 0, len(packages)), UntestedPackages: []string{}, BaselineFailed: []baselineFailedRecord{}, Interrupted: interrupted > 0, Concurrency: workers, Mutants: make([]mutantRecord, 0, len(results))}
+	mutantsByPackage := make(map[string]int)
+	for _, result := range results {
+		mutantsByPackage[result.Mutant.PackagePath()]++
+	}
+	for _, pkg := range packages {
+		switch pkg.Status {
+		case run.BaselineOK:
+			data.Packages = append(data.Packages, packageRecord{Package: pkg.Dir, BaselineMs: pkg.Baseline.Milliseconds(), TimeoutMs: run.Timeout(pkg.Baseline).Milliseconds(), Mutants: mutantsByPackage[pkg.Dir]})
+		case run.BaselineUntested:
+			data.UntestedPackages = append(data.UntestedPackages, pkg.Dir)
+		case run.BaselineFailed:
+			data.BaselineFailed = append(data.BaselineFailed, baselineFailedRecord{Package: pkg.Dir, Output: pkg.Output})
+		}
+	}
 	for _, result := range results {
 		m := result.Mutant
 		allowed := m.AllowlistReason() != ""
@@ -121,7 +149,16 @@ func build(packages []string, workers int, timeout time.Duration, results []run.
 		}
 		data.Mutants = append(data.Mutants, r)
 	}
+	sort.SliceStable(data.Mutants, func(i, j int) bool {
+		if data.Mutants[i].File != data.Mutants[j].File {
+			return data.Mutants[i].File < data.Mutants[j].File
+		}
+		return data.Mutants[i].Line < data.Mutants[j].Line
+	})
 	data.Summary.Total = len(results)
+	data.Summary.UntestedPackages = len(data.UntestedPackages)
+	data.Summary.BaselineFailed = len(data.BaselineFailed)
+	data.Summary.InterruptedMutants = interrupted
 	viable := data.Summary.Total - data.Summary.NotViable
 	if viable > 0 {
 		data.Summary.Score = float64(data.Summary.Killed+data.Summary.TimedOut+data.Summary.OOM) / float64(viable)
@@ -148,8 +185,32 @@ func human(w io.Writer, data jsonReport) {
 			}
 		}
 	}
+	if len(data.UntestedPackages) > 0 {
+		fmt.Fprintf(w, "untested packages: %d\n", len(data.UntestedPackages))
+		for _, pkg := range data.UntestedPackages {
+			fmt.Fprintf(w, "  %s\n", pkg)
+		}
+	}
+	if len(data.BaselineFailed) > 0 {
+		fmt.Fprintf(w, "baseline failed: %d\n", len(data.BaselineFailed))
+		for _, pkg := range data.BaselineFailed {
+			fmt.Fprintf(w, "  %s\n", pkg.Package)
+			for _, line := range strings.Split(pkg.Output, "\n") {
+				fmt.Fprintf(w, "    %s\n", line)
+			}
+		}
+	}
 	fmt.Fprintf(w, "not viable: %d\n", data.Summary.NotViable)
 	fmt.Fprintf(w, "\nSummary:\n  total: %d\n  killed: %d\n  timed out: %d\n  oom: %d\n  survived: %d\n  allowlisted: %d\n  score: %.2f%% (killed + timed out + oom) / (total - not viable)\n", data.Summary.Total, data.Summary.Killed, data.Summary.TimedOut, data.Summary.OOM, data.Summary.Survived, data.Summary.Allowlisted, 100*data.Summary.Score)
+	if data.Summary.UntestedPackages > 0 {
+		fmt.Fprintf(w, "  untested packages: %d\n", data.Summary.UntestedPackages)
+	}
+	if data.Summary.BaselineFailed > 0 {
+		fmt.Fprintf(w, "  baseline failed: %d\n", data.Summary.BaselineFailed)
+	}
+	if data.Interrupted {
+		fmt.Fprintf(w, "  interrupted: %d mutants not tested\n", data.Summary.InterruptedMutants)
+	}
 	if data.Summary.Allowlisted > 0 {
 		fmt.Fprintln(w, "\nallowlisted (still run, not counted as findings):")
 		for _, r := range data.Mutants {
@@ -177,6 +238,9 @@ func human(w io.Writer, data jsonReport) {
 	fmt.Fprintln(w, "- Add a test for each SURVIVED mutant.")
 	fmt.Fprintln(w, "- Add an explicit bound for each TIMED OUT or OOM mutant.")
 	fmt.Fprintln(w, "- Add //placebo:equivalent <reason> only when a mutant is observably equivalent.")
+	if len(data.BaselineFailed) > 0 {
+		fmt.Fprintln(w, "- Fix or exclude packages whose baseline failed; this run is incomplete.")
+	}
 }
 
 func contextBounds(context string) (int, int) {
@@ -189,9 +253,15 @@ func contextBounds(context string) (int, int) {
 	return start, end
 }
 
-func reproduce(packages []string, key string) string {
+func reproduce(packages []run.Package, key string) string {
 	pattern := strings.ReplaceAll(regexp.QuoteMeta(key), "'", "'\\''")
-	return fmt.Sprintf("placebo --only '%s' %s", pattern, strings.Join(packages, " "))
+	dirs := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		if pkg.Status == run.BaselineOK {
+			dirs = append(dirs, pkg.Dir)
+		}
+	}
+	return fmt.Sprintf("placebo --only '%s' %s", pattern, strings.Join(dirs, " "))
 }
 func splitLines(source []byte) []string {
 	return strings.Split(strings.TrimSuffix(string(source), "\n"), "\n")

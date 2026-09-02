@@ -11,8 +11,9 @@ Placebo has three flags and no configuration. It never modifies your working tre
 ```text
 $ placebo ./pkg/urn
 running baseline tests (go test ./pkg/urn)...
-baseline passed in 400ms; mutant timeout 30s (5x baseline, min 30s)
+baseline passed for 1 packages in 400ms; mutant timeout per package 30s (5x baseline, min 30s)
 enumerated 327 mutants across 1 packages
+rough estimate: ~1m8s at concurrency 8
 testing 327 mutants with concurrency 8 (auto: 16 cpus, 31 GiB memory)...
 finished 327 mutants in 41.2s
 --------------------------------------------------------------------------------
@@ -83,7 +84,9 @@ Run Placebo from the module root and pass package directories:
 placebo ./pkg/urn ./pkg/rbac
 ```
 
-With no package argument, Placebo tests the current directory, like `go test`. Package patterns with `...` are rejected. List the packages you want to gate; mutation testing is expensive and should run on the code where bugs cost the most.
+With no package argument, Placebo tests the current directory, like `go test`. Any `go list` package pattern works, including `./...`.
+
+A monorepo-wide run can take hours. The rough estimate printed after enumeration helps you stop an unexpectedly large run early.
 
 | Flag | Meaning |
 | --- | --- |
@@ -96,10 +99,10 @@ There are no other options. The operator set, the timeout, and the memory budget
 
 ### How a run works
 
-1. Placebo runs `go test` on each package. If the baseline fails, Placebo stops with exit code 2. Mutation results on a failing suite are meaningless.
+1. Placebo expands package arguments with `go list`, then runs one `go test -json` baseline for all packages. It records a duration and timeout for each passing package. It skips packages without tests and packages whose baseline fails. If none pass, Placebo stops with exit code 2.
 2. Placebo parses every non-test, non-generated Go file and enumerates mutants from function bodies. It needs no type information, so enumeration takes milliseconds.
 3. For each mutant, Placebo writes the mutated file to a temporary directory and runs `go build -overlay` and `go test -overlay -count=1`. The overlay redirects one source path to the mutated copy. Your working tree is never touched.
-4. Placebo classifies the outcome and prints one report.
+4. Placebo classifies the outcome and prints one report. A report with any failed baseline is incomplete and exits with code 2.
 
 ### Statuses
 
@@ -121,7 +124,7 @@ The score is `(killed + timed out + oom) / (total - not viable)`.
 | --- | --- |
 | 0 | No findings. Every viable mutant was killed, or is marked equivalent. |
 | 1 | At least one `SURVIVED`, `TIMED OUT`, or `OOM` mutant is not marked equivalent. |
-| 2 | Usage error, failing baseline, or tool failure. |
+| 2 | Usage error, failed baseline, interrupted run, or tool failure. |
 
 Use Placebo as a gate in CI by running it and checking the exit code. Nothing else is required.
 
@@ -175,7 +178,7 @@ Mutants that compile to identical source are deduplicated.
 
 ## Timeouts and memory
 
-The per-mutant timeout is `max(30s, 5 × baseline duration)`. Placebo runs each `go build` and `go test` in its own process group and kills the whole group at the deadline, so a hanging test binary cannot outlive its mutant.
+The per-mutant timeout is `max(30s, 5 × package baseline duration)`. The summary records package-specific timeouts. Placebo runs each `go build` and `go test` in its own process group and kills the whole group at the deadline, so a hanging test binary cannot outlive its mutant.
 
 Each test process runs with `GOMEMLIMIT=1536MiB`. The default concurrency budgets two GiB per worker, so a mutant that allocates without bound slows down and hits the timeout before the machine runs out of memory. Lower `--concurrency` on shared machines.
 
@@ -190,7 +193,7 @@ A working loop:
 3. The agent runs the `reproduce:` command after each fix. A single mutant takes a few seconds.
 4. Run `placebo ./pkg/x` again. Exit code 0 means done.
 
-The `--json` document contains the same fields as the human report, plus `durationMs` per mutant and `reason` for `NOT VIABLE` mutants.
+The `--json` document contains package baseline, timeout, and mutant counts. It also contains untested packages, failed baseline output, interruption state, `durationMs` per mutant, and `reason` for `NOT VIABLE` mutants.
 
 ## Why no config
 

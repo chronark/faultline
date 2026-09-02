@@ -1,6 +1,44 @@
 package run
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestParseBaselineRecordsPackageOutcomesAndMalformedOutput(t *testing.T) {
+	packages := []Package{
+		{Dir: ".", ImportPath: "example.com/root"},
+		{Dir: "./notests", ImportPath: "example.com/root/notests"},
+		{Dir: "./broken", ImportPath: "example.com/root/broken"},
+	}
+	stream := strings.NewReader(strings.Join([]string{
+		`{"Action":"output","Package":"example.com/root/broken","Output":"--- FAIL: TestBroken (0.00s)\\n"}`,
+		`{"Action":"pass","Package":"example.com/root","Elapsed":1.25}`,
+		`{"Action":"output","Package":"example.com/root/notests","Output":"?   example.com/root/notests [no test files]\\n"}`,
+		`{"Action":"skip","Package":"example.com/root/notests","Elapsed":0.01}`,
+		`compiler crashed outside test2json`,
+		`{"Action":"output","Package":"example.com/root/broken","Output":"FAIL\\n"}`,
+		`{"Action":"fail","Package":"example.com/root/broken","Elapsed":0.02}`,
+	}, "\n"))
+
+	got, err := ParseBaseline(stream, packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Status != BaselineOK || got[0].Baseline != 1250*time.Millisecond {
+		t.Errorf("passing package = %+v", got[0])
+	}
+	if got[1].Status != BaselineUntested {
+		t.Errorf("untested package = %+v", got[1])
+	}
+	if got[2].Status != BaselineFailed || !strings.Contains(got[2].Output, "--- FAIL") || !strings.Contains(got[2].Output, "FAIL") {
+		t.Errorf("failed package = %+v", got[2])
+	}
+	if !strings.Contains(got[2].Output, "compiler crashed outside test2json") {
+		t.Errorf("synthetic output was not retained with the failed package: %q", got[2].Output)
+	}
+}
 
 func TestAutoConcurrency(t *testing.T) {
 	cases := []struct {

@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 type report struct {
@@ -72,10 +75,105 @@ func TestPlaceboKnownAnswers(t *testing.T) {
 	if code != 0 || killed.Summary.Total != 1 {
 		t.Fatalf("killed selection: code=%d summary=%+v", code, killed.Summary)
 	}
-	_, code = execute(t, binary, fixture, "./...")
-	if code != 2 {
-		t.Fatalf("recursive pattern exit = %d, want 2", code)
+	t.Run("recursive package pattern", func(t *testing.T) {
+		data, code := execute(t, binary, fixture, "--json", "--concurrency", "2", "./...")
+		if code != 2 {
+			t.Fatalf("recursive pattern exit = %d, want 2", code)
+		}
+		assertKnownAnswers(t, data)
+		human, stderr, code := executeCombined(t, binary, fixture, "--concurrency", "2", "./...")
+		if code != 2 {
+			t.Fatalf("human recursive pattern exit = %d, want 2", code)
+		}
+		for _, want := range []string{"untested packages: 1", "./notests", "baseline failed: 1", "./broken", "run is incomplete"} {
+			if !strings.Contains(human, want) {
+				t.Errorf("recursive report does not contain %q\n%s", want, human)
+			}
+		}
+		if !strings.Contains(stderr, "rough estimate:") {
+			t.Errorf("stderr does not contain rough estimate:\n%s", stderr)
+		}
+	})
+
+	t.Run("interrupt", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		cmd := exec.Command(binary, "--concurrency", "1")
+		cmd.Dir = fixture
+		cmd.Env = append(os.Environ(), "PLACEBO_TEST_TIMEOUT_SECONDS=5")
+		pipe, err := cmd.StderrPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd.Stdout = &stdout
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		phase := make(chan struct{})
+		scannerDone := make(chan struct{})
+		go func() {
+			defer close(scannerDone)
+			scanner := bufio.NewScanner(pipe)
+			for scanner.Scan() {
+				stderr.WriteString(scanner.Text() + "\n")
+				if strings.Contains(scanner.Text(), "testing 28 mutants") {
+					select {
+					case <-phase:
+					default:
+						close(phase)
+					}
+				}
+			}
+		}()
+		select {
+		case <-phase:
+		case <-time.After(10 * time.Second):
+			t.Fatal("testing phase did not appear")
+		}
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			t.Fatal(err)
+		}
+		err = cmd.Wait()
+		<-scannerDone
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+			t.Fatalf("interrupt exit = %v, want 2; stderr:\n%s", err, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "interrupted:") {
+			t.Fatalf("interrupted report missing summary:\n%s", stdout.String())
+		}
+	})
+}
+
+func assertKnownAnswers(t *testing.T, data report) {
+	t.Helper()
+	want := map[string]string{killedKey: "KILLED", survivedKey: "SURVIVED", timedOutKey: "TIMED OUT", allowlistedKey: "SURVIVED", notViableKey: "NOT VIABLE"}
+	for _, mutant := range data.Mutants {
+		if status, ok := want[mutant.Key]; ok && mutant.Status == status {
+			delete(want, mutant.Key)
+		}
 	}
+	if len(want) > 0 {
+		t.Errorf("recursive report missing known answers: %v", want)
+	}
+}
+
+func executeCombined(t *testing.T, binary, dir string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PLACEBO_TEST_TIMEOUT_SECONDS=5")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	code := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatal(err)
+		}
+		code = exit.ExitCode()
+	}
+	return stdout.String(), stderr.String(), code
 }
 
 func executeOutput(t *testing.T, binary, dir string, args ...string) string {

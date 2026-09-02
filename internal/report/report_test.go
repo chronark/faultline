@@ -25,10 +25,16 @@ func TestHumanReportIncludesActionableFindingsAndFooter(t *testing.T) {
 		{Status: string(run.OOM), File: "fixture.go", Line: 9, Column: 2, Mutation: "x", DurationMs: 6000, Diff: "-x\n+y", Context: "9\tx", Reproduce: "placebo --only 'oom' ."},
 		{Status: string(run.Killed), File: "fixture.go", Line: 10, Column: 2, Key: "stale", Allowlisted: true, AllowlistReason: "same behavior", DurationMs: 10},
 	}
-	data := jsonReport{Summary: Summary{Total: 5, Killed: 1, TimedOut: 1, OOM: 1, Survived: 1, NotViable: 1, Allowlisted: 1, Score: .75}, Mutants: records}
+	data := jsonReport{
+		UntestedPackages: []string{"./notests"},
+		BaselineFailed:   []baselineFailedRecord{{Package: "./broken", Output: "--- FAIL: TestBroken"}},
+		Interrupted:      true,
+		Summary:          Summary{Total: 5, Killed: 1, TimedOut: 1, OOM: 1, Survived: 1, NotViable: 1, Allowlisted: 1, UntestedPackages: 1, BaselineFailed: 1, InterruptedMutants: 3, Score: .75},
+		Mutants:          records,
+	}
 	var output bytes.Buffer
 	human(&output, data)
-	for _, want := range []string{strings.Repeat("-", 80), "context (fixture.go:3-5):", "reproduce: placebo --only", "meaning: this test is a placebo", "duration: 5s", "meaning: this mutation made the tests hang", "meaning: this mutation made the tests allocate", "not viable: 1", "allowlisted (still run, not counted as findings):", "marker is stale", "score: 75.00% (killed + timed out + oom) / (total - not viable)", "slowest mutants:", "next actions:"} {
+	for _, want := range []string{strings.Repeat("-", 80), "context (fixture.go:3-5):", "reproduce: placebo --only", "meaning: this test is a placebo", "duration: 5s", "meaning: this mutation made the tests hang", "meaning: this mutation made the tests allocate", "untested packages: 1\n  ./notests", "baseline failed: 1\n  ./broken", "interrupted: 3 mutants not tested", "run is incomplete", "not viable: 1", "allowlisted (still run, not counted as findings):", "marker is stale", "score: 75.00% (killed + timed out + oom) / (total - not viable)", "slowest mutants:", "next actions:"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("report does not contain %q\n%s", want, output.String())
 		}
@@ -44,7 +50,7 @@ func TestHumanReportOmitsSlowestForOneMutant(t *testing.T) {
 }
 
 func TestJSONReportContainsStableFields(t *testing.T) {
-	data := jsonReport{Packages: []string{"."}, Concurrency: 2, Timeout: "30s", Summary: Summary{}, Mutants: []mutantRecord{{Status: "SURVIVED", File: "x.go", Line: 1, Column: 2, Function: "f", Mutation: "x", Original: "x", Mutated: "y", Key: "key", Allowlisted: true, AllowlistReason: "reason", Diff: "diff", Context: "context", Reproduce: "command", DurationMs: 1, Reason: "note"}}}
+	data := jsonReport{Packages: []packageRecord{{Package: ".", BaselineMs: 100, TimeoutMs: 30000, Mutants: 1}}, UntestedPackages: []string{}, BaselineFailed: []baselineFailedRecord{}, Concurrency: 2, Summary: Summary{}, Mutants: []mutantRecord{{Status: "SURVIVED", File: "x.go", Line: 1, Column: 2, Function: "f", Mutation: "x", Original: "x", Mutated: "y", Key: "key", Allowlisted: true, AllowlistReason: "reason", Diff: "diff", Context: "context", Reproduce: "command", DurationMs: 1, Reason: "note"}}}
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +59,7 @@ func TestJSONReportContainsStableFields(t *testing.T) {
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"packages", "concurrency", "timeout", "summary", "mutants"} {
+	for _, field := range []string{"packages", "untestedPackages", "baselineFailed", "interrupted", "concurrency", "summary", "mutants"} {
 		if _, ok := decoded[field]; !ok {
 			t.Errorf("JSON does not contain %q", field)
 		}

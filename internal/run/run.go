@@ -2,10 +2,13 @@
 package run
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,18 +41,137 @@ type Result struct {
 	Note     string
 }
 
-// Baseline prevents meaningless mutation scores when the unmodified package already fails.
-func Baseline(root string, packages []string) (time.Duration, error) {
-	started := time.Now()
-	args := append([]string{"test", "-count=1"}, packages...)
-	cmd := exec.Command("go", args...)
+// BaselineStatus determines whether mutants from a package can produce meaningful results.
+type BaselineStatus string
+
+const (
+	BaselineOK       BaselineStatus = "ok"
+	BaselineUntested BaselineStatus = "untested"
+	BaselineFailed   BaselineStatus = "failed"
+)
+
+// Package keeps go-list identity and baseline evidence together.
+type Package struct {
+	Dir        string
+	ImportPath string
+	Baseline   time.Duration
+	Status     BaselineStatus
+	Output     string
+}
+
+// ListPackages expands Go package patterns and returns module-relative directories.
+func ListPackages(ctx context.Context, root string, arguments []string) ([]Package, error) {
+	args := append([]string{"list", "-f", "{{.ImportPath}}\t{{.Dir}}"}, arguments...)
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = root
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if err != nil {
+		return nil, fmt.Errorf("go list failed: %w\n%s", err, stderr.String())
+	}
+	seen := make(map[string]bool)
+	var packages []Package
+	scanner := bufio.NewScanner(&stdout)
+	for scanner.Scan() {
+		importPath, directory, found := strings.Cut(scanner.Text(), "\t")
+		if !found {
+			return nil, fmt.Errorf("parse go list output %q", scanner.Text())
+		}
+		relative, relErr := filepath.Rel(root, directory)
+		if relErr != nil {
+			return nil, fmt.Errorf("make package directory relative: %w", relErr)
+		}
+		dir := "."
+		if relative != "." {
+			dir = "./" + filepath.ToSlash(relative)
+		}
+		if !seen[dir] {
+			seen[dir] = true
+			packages = append(packages, Package{Dir: dir, ImportPath: importPath})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read go list output: %w", err)
+	}
+	return packages, nil
+}
+
+// Baseline runs all packages once while retaining package-specific timing and failures.
+func Baseline(ctx context.Context, root string, packages []Package) ([]Package, error) {
+	args := []string{"test", "-json", "-count=1"}
+	for _, pkg := range packages {
+		args = append(args, pkg.Dir)
+	}
+	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "GOMEMLIMIT=1536MiB")
-	output, err := cmd.CombinedOutput()
+	output, commandErr := cmd.CombinedOutput()
+	parsed, err := ParseBaseline(bytes.NewReader(output), packages)
 	if err != nil {
-		return 0, fmt.Errorf("baseline tests failed; mutation results would be meaningless:\n%s", output)
+		return nil, err
 	}
-	return time.Since(started), nil
+	if commandErr != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(commandErr, &exitErr) {
+			return nil, fmt.Errorf("run baseline: %w", commandErr)
+		}
+	}
+	return parsed, nil
+}
+
+// ParseBaseline decodes test2json output without treating toolchain diagnostics as JSON errors.
+func ParseBaseline(reader io.Reader, packages []Package) ([]Package, error) {
+	result := append([]Package(nil), packages...)
+	byImportPath := make(map[string]int, len(result))
+	outputs := make([][]string, len(result))
+	for i := range result {
+		byImportPath[result[i].ImportPath] = i
+	}
+	type event struct {
+		Action, Package, Test, Output string
+		Elapsed                       float64
+	}
+	var synthetic []string
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		var current event
+		if err := json.Unmarshal(scanner.Bytes(), &current); err != nil {
+			synthetic = append(synthetic, scanner.Text())
+			continue
+		}
+		index, known := byImportPath[current.Package]
+		if !known || current.Test != "" {
+			continue
+		}
+		if current.Action == "output" {
+			outputs[index] = append(outputs[index], strings.TrimSuffix(current.Output, "\n"))
+		}
+		switch current.Action {
+		case "pass":
+			result[index].Status = BaselineOK
+			result[index].Baseline = time.Duration(current.Elapsed * float64(time.Second))
+		case "skip":
+			result[index].Status = BaselineUntested
+		case "fail":
+			result[index].Status = BaselineFailed
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read baseline output: %w", err)
+	}
+	attachedSynthetic := false
+	for i := range result {
+		if result[i].Status == BaselineFailed {
+			lines := append(outputs[i], synthetic...)
+			result[i].Output = outputTail(lines, 40)
+			attachedSynthetic = attachedSynthetic || len(synthetic) > 0
+		}
+	}
+	if len(synthetic) > 0 && !attachedSynthetic {
+		result = append(result, Package{Dir: "<go test>", ImportPath: "<go test>", Status: BaselineFailed, Output: outputTail(synthetic, 40)})
+	}
+	return result, nil
 }
 
 // Timeout gives slow suites proportional headroom while bounding hangs in fast suites.
@@ -64,7 +186,7 @@ func Timeout(baseline time.Duration) time.Duration {
 }
 
 // Mutant uses a private directory so parallel workers cannot collide.
-func Mutant(root, directory string, current mutate.Mutant, timeout time.Duration) Result {
+func Mutant(ctx context.Context, root, directory string, current mutate.Mutant, timeout time.Duration) Result {
 	started := time.Now()
 	finish := func(status Status, note string) Result {
 		return Result{Mutant: current, Status: status, Duration: time.Since(started), Note: note}
@@ -86,7 +208,7 @@ func Mutant(root, directory string, current mutate.Mutant, timeout time.Duration
 	if err := os.WriteFile(overlayPath, overlay, 0o600); err != nil {
 		return finish(NotViable, "write overlay: "+err.Error())
 	}
-	_, buildErr, buildContextErr := runGo(root, []string{"build", "-overlay", overlayPath, current.PackagePath()}, timeout)
+	_, buildErr, buildContextErr := runGo(ctx, root, []string{"build", "-overlay", overlayPath, current.PackagePath()}, timeout)
 	if buildErr != nil {
 		note := ""
 		if errors.Is(buildContextErr, context.DeadlineExceeded) {
@@ -94,20 +216,27 @@ func Mutant(root, directory string, current mutate.Mutant, timeout time.Duration
 		}
 		return finish(NotViable, note)
 	}
-	output, testErr, contextErr := runGo(root, []string{"test", "-overlay", overlayPath, "-count=1", "-timeout", timeout.String(), current.PackagePath()}, timeout+15*time.Second)
+	output, testErr, contextErr := runGo(ctx, root, []string{"test", "-overlay", overlayPath, "-count=1", "-timeout", timeout.String(), current.PackagePath()}, timeout+15*time.Second)
 	return finish(classify(testErr, output, contextErr), "")
 }
 
-// Execute preserves enumeration order despite concurrent mutation tests.
-func Execute(root string, mutants []mutate.Mutant, workers int, timeout time.Duration, progress func(int, Result)) ([]Result, error) {
+// Execute preserves enumeration order and returns the number left unscheduled after cancellation.
+func Execute(ctx context.Context, root string, mutants []mutate.Mutant, workers int, timeouts map[string]time.Duration, progress func(int, Result)) ([]Result, int, error) {
 	results := make([]Result, len(mutants))
-	jobs := make(chan int, len(mutants))
+	completedResults := make([]bool, len(mutants))
+	jobs := make(chan int)
 	done := make(chan int, len(mutants))
 	errs := make(chan error, workers)
-	for i := range mutants {
-		jobs <- i
-	}
-	close(jobs)
+	go func() {
+		defer close(jobs)
+		for i := range mutants {
+			select {
+			case jobs <- i:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	var group sync.WaitGroup
 	for range workers {
 		group.Add(1)
@@ -120,7 +249,10 @@ func Execute(root string, mutants []mutate.Mutant, workers int, timeout time.Dur
 			}
 			defer os.RemoveAll(dir)
 			for i := range jobs {
-				results[i] = Mutant(root, dir, mutants[i], timeout)
+				results[i] = Mutant(ctx, root, dir, mutants[i], timeouts[mutants[i].PackagePath()])
+				if ctx.Err() != nil {
+					return
+				}
 				done <- i
 			}
 		}()
@@ -129,16 +261,23 @@ func Execute(root string, mutants []mutate.Mutant, workers int, timeout time.Dur
 	completed := 0
 	for i := range done {
 		completed++
+		completedResults[i] = true
 		if progress != nil {
 			progress(completed, results[i])
 		}
 	}
 	for err := range errs {
 		if err != nil {
-			return nil, fmt.Errorf("execute mutants: %w", err)
+			return nil, len(mutants) - completed, fmt.Errorf("execute mutants: %w", err)
 		}
 	}
-	return results, nil
+	collected := make([]Result, 0, completed)
+	for i, ok := range completedResults {
+		if ok {
+			collected = append(collected, results[i])
+		}
+	}
+	return collected, len(mutants) - completed, nil
 }
 
 // AutoConcurrency prevents CPU saturation and budgets two GiB for each Go process.
@@ -189,8 +328,8 @@ func classify(commandErr error, output []byte, contextErr error) Status {
 	return Killed
 }
 
-func runGo(root string, arguments []string, timeout time.Duration) ([]byte, error, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func runGo(parent context.Context, root string, arguments []string, timeout time.Duration) ([]byte, error, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", arguments...)
 	cmd.Dir = root
@@ -211,4 +350,11 @@ func runGo(root string, arguments []string, timeout time.Duration) ([]byte, erro
 	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.CombinedOutput()
 	return output, err, ctx.Err()
+}
+
+func outputTail(lines []string, count int) string {
+	if len(lines) > count {
+		lines = lines[len(lines)-count:]
+	}
+	return strings.Join(lines, "\n")
 }
