@@ -61,6 +61,7 @@ type Package struct {
 
 // ListPackages expands Go package patterns and returns module-relative directories.
 func ListPackages(ctx context.Context, root string, arguments []string) ([]Package, error) {
+	arguments = rewriteLocalPackageArguments(arguments, os.Stat)
 	args := append([]string{"list", "-f", "{{.ImportPath}}\t{{.Dir}}"}, arguments...)
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = root
@@ -95,6 +96,31 @@ func ListPackages(ctx context.Context, root string, arguments []string) ([]Packa
 		return nil, fmt.Errorf("read go list output: %w", err)
 	}
 	return packages, nil
+}
+
+func rewriteLocalPackageArguments(arguments []string, stat func(string) (os.FileInfo, error)) []string {
+	rewritten := append([]string(nil), arguments...)
+	for i, argument := range rewritten {
+		if argument == "" || strings.HasPrefix(argument, ".") || strings.HasPrefix(argument, "/") || hasWindowsDrive(argument) {
+			continue
+		}
+		directory := strings.TrimSuffix(argument, "/...")
+		info, err := stat(directory)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		// go list treats bare paths as import paths. Only existing directories are rewritten so real import paths keep working.
+		rewritten[i] = "./" + argument
+	}
+	return rewritten
+}
+
+func hasWindowsDrive(path string) bool {
+	if len(path) < 2 || path[1] != ':' {
+		return false
+	}
+	letter := path[0]
+	return letter >= 'a' && letter <= 'z' || letter >= 'A' && letter <= 'Z'
 }
 
 // Baseline runs all packages once while retaining package-specific timing and failures.

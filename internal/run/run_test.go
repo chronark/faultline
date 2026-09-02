@@ -1,10 +1,29 @@
 package run
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRewriteLocalPackageArguments(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "pkg", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stat := func(path string) (os.FileInfo, error) { return os.Stat(filepath.Join(root, path)) }
+
+	arguments := []string{"pkg/x", "pkg/...", "./pkg/x", "github.com/foo/bar", ".", "./...", `C:\pkg\x`}
+	want := []string{"./pkg/x", "./pkg/...", "./pkg/x", "github.com/foo/bar", ".", "./...", `C:\pkg\x`}
+	got := rewriteLocalPackageArguments(arguments, stat)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("argument %q rewritten to %q, want %q", arguments[i], got[i], want[i])
+		}
+	}
+}
 
 func TestParseBaselineRecordsPackageOutcomesAndMalformedOutput(t *testing.T) {
 	packages := []Package{

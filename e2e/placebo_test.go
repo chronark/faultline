@@ -95,6 +95,16 @@ func TestPlaceboKnownAnswers(t *testing.T) {
 		}
 	})
 
+	t.Run("bare package directory", func(t *testing.T) {
+		human, _, code := executeCombined(t, binary, fixture, "--only", regexp.QuoteMeta(killedKey), ".", "broken")
+		if code != 2 {
+			t.Fatalf("bare package directory exit = %d, want 2", code)
+		}
+		if !strings.Contains(human, "baseline failed: 1") || !strings.Contains(human, "./broken") {
+			t.Fatalf("bare package directory report missing baseline failure:\n%s", human)
+		}
+	})
+
 	t.Run("interrupt", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		cmd := exec.Command(binary, "--concurrency", "1")

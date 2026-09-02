@@ -1,6 +1,6 @@
 # Architecture
 
-Placebo expands arguments with `go list`, runs one JSON baseline, enumerates mutants, builds each overlay, tests each overlay, classifies the result, and writes one report.
+Placebo expands arguments with `go list`, runs one JSON baseline, enumerates mutants, builds each overlay, tests each overlay, classifies the result, and writes one report. Before listing packages, it prefixes a bare package argument with `./` when the corresponding local directory exists; other arguments remain unchanged as import paths or `go list` patterns.
 
 The baseline maps import paths back to module-relative directories. Passing packages receive individual durations. Placebo skips packages without tests and packages whose baseline fails, then mutates the remaining packages. It preserves the output tail for each failed package.
 

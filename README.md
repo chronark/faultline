@@ -85,6 +85,7 @@ placebo ./pkg/urn ./pkg/rbac
 ```
 
 With no package argument, Placebo tests the current directory, like `go test`. Any `go list` package pattern works, including `./...`.
+You can omit the leading `./`: `placebo pkg/urn` is the same as `placebo ./pkg/urn`.
 
 A monorepo-wide run can take hours. The rough estimate printed after enumeration helps you stop an unexpectedly large run early.
 
