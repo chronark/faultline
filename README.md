@@ -1,5 +1,7 @@
 # placebo
 
+Placebo is a mutation tester for Go. It injects one small bug into your code and checks that your tests notice.
+
 A placebo trial gives one group the real drug and one group a sugar pill. If both groups get better, the drug does nothing.
 
 Placebo runs the same trial on your tests. It gives them the real code and they pass. Then it gives them a sugar pill: the same code with one small bug injected. If the tests still pass, the green result had nothing to do with the code being correct. That test is a placebo.
