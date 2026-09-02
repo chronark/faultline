@@ -10,18 +10,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chronark/loki/internal/mutate"
-	"github.com/chronark/loki/internal/report"
-	"github.com/chronark/loki/internal/run"
+	"github.com/chronark/placebo/internal/mutate"
+	"github.com/chronark/placebo/internal/report"
+	"github.com/chronark/placebo/internal/run"
 )
 
 func main() { os.Exit(runCLI(os.Args[1:])) }
 
 func runCLI(arguments []string) int {
-	flags := flag.NewFlagSet("loki", flag.ContinueOnError)
+	flags := flag.NewFlagSet("placebo", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: loki [--json] [--only <regexp>] [--concurrency N] [package...]")
+		fmt.Fprintln(os.Stderr, "usage: placebo [--json] [--only <regexp>] [--concurrency N] [package...]")
 		flags.PrintDefaults()
 	}
 	jsonMode := flags.Bool("json", false, "write the report as JSON")

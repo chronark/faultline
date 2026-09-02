@@ -1,3 +1,3 @@
-module github.com/chronark/loki
+module github.com/chronark/placebo
 
 go 1.25

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chronark/loki/internal/mutate"
-	"github.com/chronark/loki/internal/run"
+	"github.com/chronark/placebo/internal/mutate"
+	"github.com/chronark/placebo/internal/run"
 )
 
 // Writer keeps presentation policy out of mutation discovery and execution.
@@ -144,7 +144,7 @@ func human(w io.Writer, data jsonReport) {
 			case string(run.TimedOut):
 				fmt.Fprintln(w, "meaning: this mutation made the tests hang. Add an explicit iteration limit or progress check so a broken guard fails fast.")
 			default:
-				fmt.Fprintln(w, "meaning: this bug was injected and the test suite still passed. Add a test that fails under the mutated line, or add a justified //loki:equivalent marker.")
+				fmt.Fprintln(w, "meaning: this test is a placebo: it passes whether the code is right or wrong. Add a test that fails under the mutated line, or add a justified //placebo:equivalent marker.")
 			}
 		}
 	}
@@ -176,7 +176,7 @@ func human(w io.Writer, data jsonReport) {
 	fmt.Fprintln(w, "\nnext actions:")
 	fmt.Fprintln(w, "- Add a test for each SURVIVED mutant.")
 	fmt.Fprintln(w, "- Add an explicit bound for each TIMED OUT or OOM mutant.")
-	fmt.Fprintln(w, "- Add //loki:equivalent <reason> only when a mutant is observably equivalent.")
+	fmt.Fprintln(w, "- Add //placebo:equivalent <reason> only when a mutant is observably equivalent.")
 }
 
 func contextBounds(context string) (int, int) {
@@ -191,7 +191,7 @@ func contextBounds(context string) (int, int) {
 
 func reproduce(packages []string, key string) string {
 	pattern := strings.ReplaceAll(regexp.QuoteMeta(key), "'", "'\\''")
-	return fmt.Sprintf("loki --only '%s' %s", pattern, strings.Join(packages, " "))
+	return fmt.Sprintf("placebo --only '%s' %s", pattern, strings.Join(packages, " "))
 }
 func splitLines(source []byte) []string {
 	return strings.Split(strings.TrimSuffix(string(source), "\n"), "\n")

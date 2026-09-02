@@ -1,11 +1,13 @@
-# loki
+# placebo
 
-Loki is a mutation tester for Go. It makes one small change to your code, runs your tests, and checks that they fail. If the tests still pass, you have found a gap.
+A placebo trial gives one group the real drug and one group a sugar pill. If both groups get better, the drug does nothing.
 
-Loki has three flags and no configuration. It never modifies your working tree. Its output is written for humans and for coding agents: every finding carries the diff, the surrounding code, a command to reproduce it, and what to do about it.
+Placebo runs the same trial on your tests. It gives them the real code and they pass. Then it gives them a sugar pill: the same code with one small bug injected. If the tests still pass, the green result had nothing to do with the code being correct. That test is a placebo.
+
+Placebo has three flags and no configuration. It never modifies your working tree. Its output is written for humans and for coding agents: every finding carries the diff, the surrounding code, a command to reproduce it, and what to do about it.
 
 ```text
-$ loki ./pkg/urn
+$ placebo ./pkg/urn
 running baseline tests (go test ./pkg/urn)...
 baseline passed in 400ms; mutant timeout 30s (5x baseline, min 30s)
 enumerated 327 mutants across 1 packages
@@ -29,8 +31,8 @@ context (pkg/urn/urn.go:48-64):
 55
 56		if len(patternSegments) > 0 && patternSegments[len(patternSegments)-1] == "**" {
 ...
-reproduce: loki --only 'pkg/urn/urn\.go\|Covers\|> -> >=\|len\(patternSegments\) > 0' ./pkg/urn
-meaning: this bug was injected and the test suite still passed. Add a test that fails under the mutated line, or add a justified //loki:equivalent marker.
+reproduce: placebo --only 'pkg/urn/urn\.go\|Covers\|> -> >=\|len\(patternSegments\) > 0' ./pkg/urn
+meaning: this test is a placebo: it passes whether the code is right or wrong. Add a test that fails under the mutated line, or add a justified //placebo:equivalent marker.
 not viable: 12
 
 Summary:
@@ -48,38 +50,38 @@ Summary:
 
 Coverage tells you which lines your tests execute. It does not tell you which lines your tests check. A test that calls a function and asserts nothing gives 100% coverage and catches nothing.
 
-Mutation testing measures the second thing. Loki injects a bug, for example `>` becomes `>=`, or a `return err` becomes `return nil`, and runs the tests. A test suite that notices every injected bug will also notice most real ones. A mutant that survives points at a specific line where a specific bug would ship unnoticed.
+Mutation testing measures the second thing. Placebo injects a bug, for example `>` becomes `>=`, or a `return err` becomes `return nil`, and runs the tests. A test suite that notices every injected bug will also notice most real ones. A mutant that survives points at a specific line where a specific bug would ship unnoticed.
 
 ## Install
 
 With Go:
 
 ```bash
-go install github.com/chronark/loki@latest
+go install github.com/chronark/placebo@latest
 ```
 
 With [mise](https://mise.jdx.dev), pinned to a release:
 
 ```toml
 [tools]
-"github:chronark/loki" = "0.1.0"
+"github:chronark/placebo" = "0.1.0"
 ```
 
-Or download a binary from [GitHub Releases](https://github.com/chronark/loki/releases). Loki has no dependencies beyond the Go toolchain it finds on your `PATH`.
+Or download a binary from [GitHub Releases](https://github.com/chronark/placebo/releases). Placebo has no dependencies beyond the Go toolchain it finds on your `PATH`.
 
 ## Use
 
 ```text
-loki [--json] [--only <regexp>] [--concurrency N] [package...]
+placebo [--json] [--only <regexp>] [--concurrency N] [package...]
 ```
 
-Run Loki from the module root and pass package directories:
+Run Placebo from the module root and pass package directories:
 
 ```bash
-loki ./pkg/urn ./pkg/rbac
+placebo ./pkg/urn ./pkg/rbac
 ```
 
-With no package argument, Loki tests the current directory, like `go test`. Package patterns with `...` are rejected. List the packages you want to gate; mutation testing is expensive and should run on the code where bugs cost the most.
+With no package argument, Placebo tests the current directory, like `go test`. Package patterns with `...` are rejected. List the packages you want to gate; mutation testing is expensive and should run on the code where bugs cost the most.
 
 | Flag | Meaning |
 | --- | --- |
@@ -88,14 +90,14 @@ With no package argument, Loki tests the current directory, like `go test`. Pack
 | `--concurrency N` | Number of mutants tested in parallel. Default: `min(cpus / 2, memory / 2 GiB)`. |
 | `--version` | Print the version. |
 
-There are no other options. The operator set, the timeout, and the memory budget are Loki's opinion, so every repository gets the same signal.
+There are no other options. The operator set, the timeout, and the memory budget are Placebo's opinion, so every repository gets the same signal.
 
 ### How a run works
 
-1. Loki runs `go test` on each package. If the baseline fails, Loki stops with exit code 2. Mutation results on a failing suite are meaningless.
-2. Loki parses every non-test, non-generated Go file and enumerates mutants from function bodies. It needs no type information, so enumeration takes milliseconds.
-3. For each mutant, Loki writes the mutated file to a temporary directory and runs `go build -overlay` and `go test -overlay -count=1`. The overlay redirects one source path to the mutated copy. Your working tree is never touched.
-4. Loki classifies the outcome and prints one report.
+1. Placebo runs `go test` on each package. If the baseline fails, Placebo stops with exit code 2. Mutation results on a failing suite are meaningless.
+2. Placebo parses every non-test, non-generated Go file and enumerates mutants from function bodies. It needs no type information, so enumeration takes milliseconds.
+3. For each mutant, Placebo writes the mutated file to a temporary directory and runs `go build -overlay` and `go test -overlay -count=1`. The overlay redirects one source path to the mutated copy. Your working tree is never touched.
+4. Placebo classifies the outcome and prints one report.
 
 ### Statuses
 
@@ -107,7 +109,7 @@ There are no other options. The operator set, the timeout, and the memory budget
 | `OOM` | The kernel killed the test process. The mutant allocated without limit. | Add an explicit size limit on the growing structure. |
 | `NOT VIABLE` | The mutant did not compile. | Nothing. It is excluded from the score. |
 
-`TIMED OUT` and `OOM` count as detected in the score, because the tests did notice. Loki still reports them as findings, because a loop that can spin forever after a one-token change has no independent bound.
+`TIMED OUT` and `OOM` count as detected in the score, because the tests did notice. Placebo still reports them as findings, because a loop that can spin forever after a one-token change has no independent bound.
 
 The score is `(killed + timed out + oom) / (total - not viable)`.
 
@@ -119,7 +121,7 @@ The score is `(killed + timed out + oom) / (total - not viable)`.
 | 1 | At least one `SURVIVED`, `TIMED OUT`, or `OOM` mutant is not marked equivalent. |
 | 2 | Usage error, failing baseline, or tool failure. |
 
-Use Loki as a gate in CI by running it and checking the exit code. Nothing else is required.
+Use Placebo as a gate in CI by running it and checking the exit code. Nothing else is required.
 
 ### Equivalent mutants
 
@@ -128,10 +130,10 @@ Some mutants cannot change behavior. Removing `continue` at the end of a loop bo
 Mark the line in the source:
 
 ```go
-if len(parts) > 0 { //loki:equivalent parts is never empty here, the caller splits a non-empty string
+if len(parts) > 0 { //placebo:equivalent parts is never empty here, the caller splits a non-empty string
 ```
 
-The reason is mandatory. Loki exits with code 2 if the reason is missing. Loki still runs marked mutants. If a marked mutant gets killed, the report says `KILLED (marker is stale, remove it)`, so wrong justifications stay visible.
+The reason is mandatory. Placebo exits with code 2 if the reason is missing. Placebo still runs marked mutants. If a marked mutant gets killed, the report says `KILLED (marker is stale, remove it)`, so wrong justifications stay visible.
 
 There is no allowlist file. The marker lives next to the code, moves with it, and shows up in code review.
 
@@ -147,7 +149,7 @@ The key is `file|function|mutation|original expression`. It has no line number, 
 
 ## Operators
 
-Loki always applies all 15 groups.
+Placebo always applies all 15 groups.
 
 | Group | Mutation |
 | --- | --- |
@@ -171,34 +173,34 @@ Mutants that compile to identical source are deduplicated.
 
 ## Timeouts and memory
 
-The per-mutant timeout is `max(30s, 5 × baseline duration)`. Loki runs each `go build` and `go test` in its own process group and kills the whole group at the deadline, so a hanging test binary cannot outlive its mutant.
+The per-mutant timeout is `max(30s, 5 × baseline duration)`. Placebo runs each `go build` and `go test` in its own process group and kills the whole group at the deadline, so a hanging test binary cannot outlive its mutant.
 
 Each test process runs with `GOMEMLIMIT=1536MiB`. The default concurrency budgets two GiB per worker, so a mutant that allocates without bound slows down and hits the timeout before the machine runs out of memory. Lower `--concurrency` on shared machines.
 
-## Using Loki with coding agents
+## Using Placebo with coding agents
 
-Loki's report is designed to be pasted into an agent's context. Each finding is self-contained: the diff shows the injected bug, the context shows the function, `reproduce:` gives the exact command, and `meaning:` says whether the fix is a test, a bound, or a marker.
+Placebo's report is designed to be pasted into an agent's context. Each finding is self-contained: the diff shows the injected bug, the context shows the function, `reproduce:` gives the exact command, and `meaning:` says whether the fix is a test, a bound, or a marker.
 
 A working loop:
 
-1. Run `loki --json ./pkg/x > findings.json`.
-2. Give the agent the findings and this instruction: for each `SURVIVED` mutant, add a test that fails under the mutated line; for each `TIMED OUT` or `OOM` mutant, add an explicit bound in the code; add `//loki:equivalent <reason>` only when no test can distinguish the mutant.
+1. Run `placebo --json ./pkg/x > findings.json`.
+2. Give the agent the findings and this instruction: for each `SURVIVED` mutant, add a test that fails under the mutated line; for each `TIMED OUT` or `OOM` mutant, add an explicit bound in the code; add `//placebo:equivalent <reason>` only when no test can distinguish the mutant.
 3. The agent runs the `reproduce:` command after each fix. A single mutant takes a few seconds.
-4. Run `loki ./pkg/x` again. Exit code 0 means done.
+4. Run `placebo ./pkg/x` again. Exit code 0 means done.
 
 The `--json` document contains the same fields as the human report, plus `durationMs` per mutant and `reason` for `NOT VIABLE` mutants.
 
 ## Why no config
 
-Every knob is a way to weaken the gate. A team that can disable operators will disable the ones that find bugs. A team that can raise the timeout will hide the loop that has no bound. Loki's defaults are the same for every repository, so a score means the same thing everywhere.
+Every knob is a way to weaken the gate. A team that can disable operators will disable the ones that find bugs. A team that can raise the timeout will hide the loop that has no bound. Placebo's defaults are the same for every repository, so a score means the same thing everywhere.
 
 If a default is wrong for everyone, open an issue.
 
 ## Limits
 
-- Loki mutates function bodies only. Package-level declarations, constants, and type definitions are not mutated.
+- Placebo mutates function bodies only. Package-level declarations, constants, and type definitions are not mutated.
 - Enumeration is syntactic. Some mutants do not compile and are reported as `NOT VIABLE`. This is expected and excluded from the score.
-- Loki tests each mutant against the tests of its own package. It does not run tests in other packages that import the mutated one.
+- Placebo tests each mutant against the tests of its own package. It does not run tests in other packages that import the mutated one.
 - Linux and macOS. Process groups are not implemented for Windows.
 
 ## Development

@@ -19,6 +19,6 @@
 //   - return: non-error return value zeroing
 //
 // Mutant keys have the stable format file|function|mutation|original. A source
-// line may mark observably equivalent mutants with //loki:equivalent <reason>.
+// line may mark observably equivalent mutants with //placebo:equivalent <reason>.
 // A reason is mandatory, and marked mutants are still run.
 package mutate

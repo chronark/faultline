@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chronark/loki/internal/run"
+	"github.com/chronark/placebo/internal/run"
 )
 
 func TestMutationDiffExtractsChangedRegion(t *testing.T) {
@@ -20,15 +20,15 @@ func TestMutationDiffExtractsChangedRegion(t *testing.T) {
 
 func TestHumanReportIncludesActionableFindingsAndFooter(t *testing.T) {
 	records := []mutantRecord{
-		{Status: string(run.Survived), File: "fixture.go", Line: 4, Column: 11, Function: "covers", Mutation: "> -> >=", Key: "fixture.go|covers|> -> >=|n > 0", Diff: "-\treturn n > 0\n+\treturn n >= 0", Context: "3\tfunc covers(n int) bool {\n4\t\treturn n > 0\n5\t}", Reproduce: "loki --only 'key' .", DurationMs: 42},
-		{Status: string(run.TimedOut), File: "fixture.go", Line: 8, Column: 2, Mutation: "++ -> --", DurationMs: 5000, Diff: "-i++\n+i--", Context: "8\ti++", Reproduce: "loki --only 'timeout' ."},
-		{Status: string(run.OOM), File: "fixture.go", Line: 9, Column: 2, Mutation: "x", DurationMs: 6000, Diff: "-x\n+y", Context: "9\tx", Reproduce: "loki --only 'oom' ."},
+		{Status: string(run.Survived), File: "fixture.go", Line: 4, Column: 11, Function: "covers", Mutation: "> -> >=", Key: "fixture.go|covers|> -> >=|n > 0", Diff: "-\treturn n > 0\n+\treturn n >= 0", Context: "3\tfunc covers(n int) bool {\n4\t\treturn n > 0\n5\t}", Reproduce: "placebo --only 'key' .", DurationMs: 42},
+		{Status: string(run.TimedOut), File: "fixture.go", Line: 8, Column: 2, Mutation: "++ -> --", DurationMs: 5000, Diff: "-i++\n+i--", Context: "8\ti++", Reproduce: "placebo --only 'timeout' ."},
+		{Status: string(run.OOM), File: "fixture.go", Line: 9, Column: 2, Mutation: "x", DurationMs: 6000, Diff: "-x\n+y", Context: "9\tx", Reproduce: "placebo --only 'oom' ."},
 		{Status: string(run.Killed), File: "fixture.go", Line: 10, Column: 2, Key: "stale", Allowlisted: true, AllowlistReason: "same behavior", DurationMs: 10},
 	}
 	data := jsonReport{Summary: Summary{Total: 5, Killed: 1, TimedOut: 1, OOM: 1, Survived: 1, NotViable: 1, Allowlisted: 1, Score: .75}, Mutants: records}
 	var output bytes.Buffer
 	human(&output, data)
-	for _, want := range []string{strings.Repeat("-", 80), "context (fixture.go:3-5):", "reproduce: loki --only", "meaning: this bug was injected", "duration: 5s", "meaning: this mutation made the tests hang", "meaning: this mutation made the tests allocate", "not viable: 1", "allowlisted (still run, not counted as findings):", "marker is stale", "score: 75.00% (killed + timed out + oom) / (total - not viable)", "slowest mutants:", "next actions:"} {
+	for _, want := range []string{strings.Repeat("-", 80), "context (fixture.go:3-5):", "reproduce: placebo --only", "meaning: this test is a placebo", "duration: 5s", "meaning: this mutation made the tests hang", "meaning: this mutation made the tests allocate", "not viable: 1", "allowlisted (still run, not counted as findings):", "marker is stale", "score: 75.00% (killed + timed out + oom) / (total - not viable)", "slowest mutants:", "next actions:"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("report does not contain %q\n%s", want, output.String())
 		}

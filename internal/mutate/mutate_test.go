@@ -342,11 +342,11 @@ func mutantDescriptions(mutants []Mutant) []string {
 }
 
 func TestEquivalentMarker(t *testing.T) {
-	reason, err := equivalentMarker([]byte("package x\nvar x = 1 //loki:equivalent same result\n"), 2, "x.go")
+	reason, err := equivalentMarker([]byte("package x\nvar x = 1 //placebo:equivalent same result\n"), 2, "x.go")
 	require.NoError(t, err)
 	require.Equal(t, "same result", reason)
-	_, err = equivalentMarker([]byte("package x\nvar x = 1 //loki:equivalent\n"), 2, "x.go")
-	require.EqualError(t, err, "x.go:2: //loki:equivalent requires a reason")
+	_, err = equivalentMarker([]byte("package x\nvar x = 1 //placebo:equivalent\n"), 2, "x.go")
+	require.EqualError(t, err, "x.go:2: //placebo:equivalent requires a reason")
 }
 
 type assertions struct{}

@@ -12,7 +12,7 @@ func Count(n int) int {
 	return total
 }
 
-func Equivalent(n int) bool { return n > 0 } //loki:equivalent callers require positive input
+func Equivalent(n int) bool { return n > 0 } //placebo:equivalent callers require positive input
 
 func CompileSensitive() int {
 	value := 1

@@ -1,6 +1,6 @@
 version: 2
 
-project_name: loki
+project_name: placebo
 
 before:
   hooks:
@@ -9,7 +9,7 @@ before:
 
 builds:
   - main: .
-    binary: loki
+    binary: placebo
     env:
       - CGO_ENABLED=0
     goos:
@@ -24,7 +24,7 @@ builds:
 archives:
   - formats:
       - tar.gz
-    name_template: "loki_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "placebo_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt

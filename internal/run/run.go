@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chronark/loki/internal/mutate"
+	"github.com/chronark/placebo/internal/mutate"
 )
 
 // Status distinguishes useful test detection from infrastructure and compile outcomes.
@@ -54,7 +54,7 @@ func Baseline(root string, packages []string) (time.Duration, error) {
 
 // Timeout gives slow suites proportional headroom while bounding hangs in fast suites.
 func Timeout(baseline time.Duration) time.Duration {
-	if override := os.Getenv("LOKI_TEST_TIMEOUT_SECONDS"); override != "" {
+	if override := os.Getenv("PLACEBO_TEST_TIMEOUT_SECONDS"); override != "" {
 		seconds, err := strconv.Atoi(override)
 		if err == nil && seconds > 0 {
 			return time.Duration(seconds) * time.Second
@@ -113,7 +113,7 @@ func Execute(root string, mutants []mutate.Mutant, workers int, timeout time.Dur
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			dir, err := os.MkdirTemp("", "loki-*")
+			dir, err := os.MkdirTemp("", "placebo-*")
 			if err != nil {
 				errs <- err
 				return
