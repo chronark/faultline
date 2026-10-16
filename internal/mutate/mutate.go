@@ -253,7 +253,7 @@ func equivalentMarker(source []byte, line int, path string) (string, error) {
 	if line < 1 || line > len(lines) {
 		return "", nil
 	}
-	const marker = "//placebo:equivalent"
+	const marker = "//faultline:equivalent"
 	text := string(lines[line-1])
 	index := strings.Index(text, marker)
 	if index < 0 {
@@ -261,7 +261,7 @@ func equivalentMarker(source []byte, line int, path string) (string, error) {
 	}
 	reason := strings.TrimSpace(text[index+len(marker):])
 	if len(strings.Fields(reason)) == 0 {
-		return "", fmt.Errorf("%s:%d: //placebo:equivalent requires a reason", filepath.ToSlash(path), line)
+		return "", fmt.Errorf("%s:%d: //faultline:equivalent requires a reason", filepath.ToSlash(path), line)
 	}
 	return reason, nil
 }

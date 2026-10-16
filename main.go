@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chronark/placebo/internal/mutate"
-	"github.com/chronark/placebo/internal/report"
-	"github.com/chronark/placebo/internal/run"
+	"github.com/chronark/faultline/internal/mutate"
+	"github.com/chronark/faultline/internal/report"
+	"github.com/chronark/faultline/internal/run"
 )
 
 func main() {
@@ -26,10 +26,10 @@ func main() {
 
 // runCLI returns 0 for success, 1 for findings, and 2 for incomplete runs or errors.
 func runCLI(ctx context.Context, arguments []string) int {
-	flags := flag.NewFlagSet("placebo", flag.ContinueOnError)
+	flags := flag.NewFlagSet("faultline", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: placebo [--json] [--only <regexp>] [--concurrency N] [package...]")
+		fmt.Fprintln(os.Stderr, "usage: faultline [--json] [--only <regexp>] [--concurrency N] [package...]")
 		flags.PrintDefaults()
 	}
 	jsonMode := flags.Bool("json", false, "write the report as JSON")
