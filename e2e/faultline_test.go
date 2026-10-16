@@ -30,12 +30,16 @@ const (
 	notViableKey   = "fixture.go|CompileSensitive|return value -> 0|value"
 )
 
-func TestPlaceboKnownAnswers(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "placebo")
+func TestFaultlineKnownAnswers(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "faultline")
 	command := exec.Command("go", "build", "-o", binary, "..")
 	command.Dir = "."
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build placebo: %v\n%s", err, output)
+		t.Fatalf("build faultline: %v\n%s", err, output)
+	}
+	help, err := exec.Command(binary, "--help").CombinedOutput()
+	if err != nil || !strings.Contains(string(help), "usage: faultline ") {
+		t.Fatalf("help: %v\n%s", err, help)
 	}
 	fixture := filepath.Join("testdata", "fixture")
 	data, code := execute(t, binary, fixture, "--json", "--concurrency", "2")
@@ -48,7 +52,7 @@ func TestPlaceboKnownAnswers(t *testing.T) {
 			if m.Status != status {
 				t.Errorf("%s = %s, want %s", m.Key, m.Status, status)
 			}
-			if m.Status != "KILLED" && m.Status != "NOT VIABLE" && !strings.HasPrefix(m.Reproduce, "placebo --only") {
+			if m.Status != "KILLED" && m.Status != "NOT VIABLE" && !strings.HasPrefix(m.Reproduce, "faultline --only") {
 				t.Errorf("reproduce for %s = %q", m.Key, m.Reproduce)
 			}
 			delete(want, m.Key)
@@ -62,7 +66,7 @@ func TestPlaceboKnownAnswers(t *testing.T) {
 		t.Fatalf("unexpected summary: %+v", s)
 	}
 	human := executeOutput(t, binary, fixture, "--concurrency", "2")
-	for _, want := range []string{"meaning: this test is a placebo", "meaning: this mutation made the tests hang", "duration:", "next actions:", "not viable: 1", "allowlisted (still run", "slowest mutants:", strings.Repeat("-", 80)} {
+	for _, want := range []string{"meaning: the tests did not detect this mutation", "//faultline:equivalent", "meaning: this mutation made the tests hang", "duration:", "next actions:", "not viable: 1", "allowlisted (still run", "slowest mutants:", strings.Repeat("-", 80)} {
 		if !strings.Contains(human, want) {
 			t.Errorf("human report does not contain %q", want)
 		}
@@ -109,7 +113,7 @@ func TestPlaceboKnownAnswers(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		cmd := exec.Command(binary, "--concurrency", "1")
 		cmd.Dir = fixture
-		cmd.Env = append(os.Environ(), "PLACEBO_TEST_TIMEOUT_SECONDS=5")
+		cmd.Env = append(os.Environ(), "FAULTLINE_TEST_TIMEOUT_SECONDS=5")
 		pipe, err := cmd.StderrPipe()
 		if err != nil {
 			t.Fatal(err)
@@ -171,7 +175,7 @@ func executeCombined(t *testing.T, binary, dir string, args ...string) (string, 
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PLACEBO_TEST_TIMEOUT_SECONDS=5")
+	cmd.Env = append(os.Environ(), "FAULTLINE_TEST_TIMEOUT_SECONDS=5")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -190,7 +194,7 @@ func executeOutput(t *testing.T, binary, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PLACEBO_TEST_TIMEOUT_SECONDS=5")
+	cmd.Env = append(os.Environ(), "FAULTLINE_TEST_TIMEOUT_SECONDS=5")
 	output, err := cmd.Output()
 	var exit *exec.ExitError
 	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() != 1) {
@@ -203,7 +207,7 @@ func execute(t *testing.T, binary, dir string, args ...string) (report, int) {
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PLACEBO_TEST_TIMEOUT_SECONDS=5")
+	cmd.Env = append(os.Environ(), "FAULTLINE_TEST_TIMEOUT_SECONDS=5")
 	output, err := cmd.Output()
 	code := 0
 	if err != nil {

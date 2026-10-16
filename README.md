@@ -1,15 +1,15 @@
-# placebo
+![Fault Line: Test your tests](docs/assets/banner.png)
 
-Placebo is a mutation tester for Go. It injects one small bug into your code and checks that your tests notice.
+# Fault Line
 
-A placebo trial gives one group the real drug and one group a sugar pill. If both groups get better, the drug does nothing.
+Fault Line is a mutation tester for Go. It makes small changes to your code and checks whether your tests detect them.
 
-Placebo runs the same trial on your tests. It gives them the real code and they pass. Then it gives them a sugar pill: the same code with one small bug injected. If the tests still pass, the green result had nothing to do with the code being correct. That test is a placebo.
+A passing test suite can still miss a broken boundary check or a swallowed error. Like an intact chain with a fragile link, it can look stronger than it is. Fault Line shows you which mutations pass unnoticed, so you can add the missing checks.
 
-Placebo has three flags and no configuration. It never modifies your working tree. Its output is written for humans and for coding agents: every finding carries the diff, the surrounding code, a command to reproduce it, and what to do about it.
+Fault Line needs no configuration and never modifies your working tree. Its output is written for humans and coding agents: every finding carries the diff, the surrounding code, a command to reproduce it, and what to do about it.
 
 ```text
-$ placebo ./pkg/urn
+$ faultline ./pkg/urn
 running baseline tests (go test ./pkg/urn)...
 baseline passed for 1 packages in 400ms; mutant timeout per package 30s (5x baseline, min 30s)
 enumerated 327 mutants across 1 packages
@@ -34,8 +34,8 @@ context (pkg/urn/urn.go:48-64):
 55
 56		if len(patternSegments) > 0 && patternSegments[len(patternSegments)-1] == "**" {
 ...
-reproduce: placebo --only 'pkg/urn/urn\.go\|Covers\|> -> >=\|len\(patternSegments\) > 0' ./pkg/urn
-meaning: this test is a placebo: it passes whether the code is right or wrong. Add a test that fails under the mutated line, or add a justified //placebo:equivalent marker.
+reproduce: faultline --only 'pkg/urn/urn\.go\|Covers\|> -> >=\|len\(patternSegments\) > 0' ./pkg/urn
+meaning: the tests did not detect this mutation. Add a test that fails under the mutated line, or add a justified //faultline:equivalent marker.
 not viable: 12
 
 Summary:
@@ -51,41 +51,47 @@ Summary:
 
 ## Why mutation testing
 
-Coverage tells you which lines your tests execute. It does not tell you which lines your tests check. A test that calls a function and asserts nothing gives 100% coverage and catches nothing.
+Coverage tells you which lines your tests execute. It does not tell you which changes your tests would detect.
 
-Mutation testing measures the second thing. Placebo injects a bug, for example `>` becomes `>=`, or a `return err` becomes `return nil`, and runs the tests. A test suite that notices every injected bug will also notice most real ones. A mutant that survives points at a specific line where a specific bug would ship unnoticed.
+Fault Line changes the code, for example `>` becomes `>=`, or `return err` becomes `return nil`, and runs the tests. When a behavior-changing mutation survives, the tests missed that change. Some mutations preserve behavior; no test can distinguish those equivalent mutants.
 
 ## Install
 
-With Go:
+Run without installing:
 
 ```bash
-go install github.com/chronark/placebo@latest
+go run github.com/chronark/faultline@latest
 ```
 
-With [mise](https://mise.jdx.dev), pinned to a release:
+Or install the CLI with Go:
+
+```bash
+go install github.com/chronark/faultline@latest
+```
+
+With [mise](https://mise.jdx.dev):
 
 ```toml
 [tools]
-"github:chronark/placebo" = "0.1.0"
+"github:chronark/faultline" = "latest"
 ```
 
-Or download a binary from [GitHub Releases](https://github.com/chronark/placebo/releases). Placebo has no dependencies beyond the Go toolchain it finds on your `PATH`.
+Or download a binary from [GitHub Releases](https://github.com/chronark/faultline/releases). Fault Line has no dependencies beyond the Go toolchain it finds on your `PATH`.
 
 ## Use
 
 ```text
-placebo [--json] [--only <regexp>] [--concurrency N] [package...]
+faultline [--json] [--only <regexp>] [--concurrency N] [package...]
 ```
 
-Run Placebo from the module root and pass package directories:
+Run Fault Line from the module root and pass package directories:
 
 ```bash
-placebo ./pkg/urn ./pkg/rbac
+faultline ./pkg/urn ./pkg/rbac
 ```
 
-With no package argument, Placebo tests the current directory, like `go test`. Any `go list` package pattern works, including `./...`.
-You can omit the leading `./`: `placebo pkg/urn` is the same as `placebo ./pkg/urn`.
+With no package argument, Fault Line tests the current directory, like `go test`. Any `go list` package pattern works, including `./...`.
+You can omit the leading `./`: `faultline pkg/urn` is the same as `faultline ./pkg/urn`.
 
 A monorepo-wide run can take hours. The rough estimate printed after enumeration helps you stop an unexpectedly large run early.
 
@@ -96,14 +102,14 @@ A monorepo-wide run can take hours. The rough estimate printed after enumeration
 | `--concurrency N` | Number of mutants tested in parallel. Default: `min(cpus / 2, memory / 2 GiB)`. |
 | `--version` | Print the version. |
 
-There are no other options. The operator set, the timeout, and the memory budget are Placebo's opinion, so every repository gets the same signal.
+There are no other options. The operator set, the timeout, and the memory budget are Fault Line's opinion, so every repository gets the same signal.
 
 ### How a run works
 
-1. Placebo expands package arguments with `go list`, then runs one `go test -json` baseline for all packages. It records a duration and timeout for each passing package. It skips packages without tests and packages whose baseline fails. If none pass, Placebo stops with exit code 2.
-2. Placebo parses every non-test, non-generated Go file and enumerates mutants from function bodies. It needs no type information, so enumeration takes milliseconds.
-3. For each mutant, Placebo writes the mutated file to a temporary directory and runs `go build -overlay` and `go test -overlay -count=1`. The overlay redirects one source path to the mutated copy. Your working tree is never touched.
-4. Placebo classifies the outcome and prints one report. A report with any failed baseline is incomplete and exits with code 2.
+1. Fault Line expands package arguments with `go list`, then runs one `go test -json` baseline for all packages. It records a duration and timeout for each passing package. It skips packages without tests and packages whose baseline fails. If none pass, Fault Line stops with exit code 2.
+2. Fault Line parses every non-test, non-generated Go file and enumerates mutants from function bodies. It needs no type information, so enumeration takes milliseconds.
+3. For each mutant, Fault Line writes the mutated file to a temporary directory and runs `go build -overlay` and `go test -overlay -count=1`. The overlay redirects one source path to the mutated copy. Your working tree is never touched.
+4. Fault Line classifies the outcome and prints one report. A report with any failed baseline is incomplete and exits with code 2.
 
 ### Statuses
 
@@ -115,7 +121,7 @@ There are no other options. The operator set, the timeout, and the memory budget
 | `OOM` | The kernel killed the test process. The mutant allocated without limit. | Add an explicit size limit on the growing structure. |
 | `NOT VIABLE` | The mutant did not compile. | Nothing. It is excluded from the score. |
 
-`TIMED OUT` and `OOM` count as detected in the score, because the tests did notice. Placebo still reports them as findings, because a loop that can spin forever after a one-token change has no independent bound.
+`TIMED OUT` and `OOM` count as detected in the score, because the tests did notice. Fault Line still reports them as findings, because a loop that can spin forever after a one-token change has no independent bound.
 
 The score is `(killed + timed out + oom) / (total - not viable)`.
 
@@ -127,7 +133,7 @@ The score is `(killed + timed out + oom) / (total - not viable)`.
 | 1 | At least one `SURVIVED`, `TIMED OUT`, or `OOM` mutant is not marked equivalent. |
 | 2 | Usage error, failed baseline, interrupted run, or tool failure. |
 
-Use Placebo as a gate in CI by running it and checking the exit code. Nothing else is required.
+Use Fault Line as a gate in CI by running it and checking the exit code. Nothing else is required.
 
 ### Equivalent mutants
 
@@ -136,10 +142,10 @@ Some mutants cannot change behavior. Removing `continue` at the end of a loop bo
 Mark the line in the source:
 
 ```go
-if len(parts) > 0 { //placebo:equivalent parts is never empty here, the caller splits a non-empty string
+if len(parts) > 0 { //faultline:equivalent parts is never empty here, the caller splits a non-empty string
 ```
 
-The reason is mandatory. Placebo exits with code 2 if the reason is missing. Placebo still runs marked mutants. If a marked mutant gets killed, the report says `KILLED (marker is stale, remove it)`, so wrong justifications stay visible.
+The reason is mandatory. Fault Line exits with code 2 if the reason is missing. Fault Line still runs marked mutants. If a marked mutant gets killed, the report says `KILLED (marker is stale, remove it)`, so wrong justifications stay visible.
 
 There is no allowlist file. The marker lives next to the code, moves with it, and shows up in code review.
 
@@ -155,7 +161,7 @@ The key is `file|function|mutation|original expression`. It has no line number, 
 
 ## Operators
 
-Placebo always applies all 15 groups.
+Fault Line always applies all 15 groups.
 
 | Group | Mutation |
 | --- | --- |
@@ -179,34 +185,34 @@ Mutants that compile to identical source are deduplicated.
 
 ## Timeouts and memory
 
-The per-mutant timeout is `max(30s, 5 × package baseline duration)`. The summary records package-specific timeouts. Placebo runs each `go build` and `go test` in its own process group and kills the whole group at the deadline, so a hanging test binary cannot outlive its mutant.
+The per-mutant timeout is `max(30s, 5 × package baseline duration)`. The summary records package-specific timeouts. Fault Line runs each `go build` and `go test` in its own process group and kills the whole group at the deadline, so a hanging test binary cannot outlive its mutant.
 
 Each test process runs with `GOMEMLIMIT=1536MiB`. The default concurrency budgets two GiB per worker, so a mutant that allocates without bound slows down and hits the timeout before the machine runs out of memory. Lower `--concurrency` on shared machines.
 
-## Using Placebo with coding agents
+## Using Fault Line with coding agents
 
-Placebo's report is designed to be pasted into an agent's context. Each finding is self-contained: the diff shows the injected bug, the context shows the function, `reproduce:` gives the exact command, and `meaning:` says whether the fix is a test, a bound, or a marker.
+Fault Line's report is designed to be pasted into an agent's context. Each finding is self-contained: the diff shows the injected bug, the context shows the function, `reproduce:` gives the exact command, and `meaning:` says whether the fix is a test, a bound, or a marker.
 
 A working loop:
 
-1. Run `placebo --json ./pkg/x > findings.json`.
-2. Give the agent the findings and this instruction: for each `SURVIVED` mutant, add a test that fails under the mutated line; for each `TIMED OUT` or `OOM` mutant, add an explicit bound in the code; add `//placebo:equivalent <reason>` only when no test can distinguish the mutant.
+1. Run `faultline --json ./pkg/x > findings.json`.
+2. Give the agent the findings and this instruction: for each `SURVIVED` mutant, add a test that fails under the mutated line; for each `TIMED OUT` or `OOM` mutant, add an explicit bound in the code; add `//faultline:equivalent <reason>` only when no test can distinguish the mutant.
 3. The agent runs the `reproduce:` command after each fix. A single mutant takes a few seconds.
-4. Run `placebo ./pkg/x` again. Exit code 0 means done.
+4. Run `faultline ./pkg/x` again. Exit code 0 means done.
 
 The `--json` document contains package baseline, timeout, and mutant counts. It also contains untested packages, failed baseline output, interruption state, `durationMs` per mutant, and `reason` for `NOT VIABLE` mutants.
 
 ## Why no config
 
-Every knob is a way to weaken the gate. A team that can disable operators will disable the ones that find bugs. A team that can raise the timeout will hide the loop that has no bound. Placebo's defaults are the same for every repository, so a score means the same thing everywhere.
+Every knob is a way to weaken the gate. A team that can disable operators will disable the ones that find bugs. A team that can raise the timeout will hide the loop that has no bound. Fault Line's defaults are the same for every repository, so a score means the same thing everywhere.
 
 If a default is wrong for everyone, open an issue.
 
 ## Limits
 
-- Placebo mutates function bodies only. Package-level declarations, constants, and type definitions are not mutated.
+- Fault Line mutates function bodies only. Package-level declarations, constants, and type definitions are not mutated.
 - Enumeration is syntactic. Some mutants do not compile and are reported as `NOT VIABLE`. This is expected and excluded from the score.
-- Placebo tests each mutant against the tests of its own package. It does not run tests in other packages that import the mutated one.
+- Fault Line tests each mutant against the tests of its own package. It does not run tests in other packages that import the mutated one.
 - Linux and macOS. Process groups are not implemented for Windows.
 
 ## Development

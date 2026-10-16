@@ -342,11 +342,23 @@ func mutantDescriptions(mutants []Mutant) []string {
 }
 
 func TestEquivalentMarker(t *testing.T) {
-	reason, err := equivalentMarker([]byte("package x\nvar x = 1 //placebo:equivalent same result\n"), 2, "x.go")
+	reason, err := equivalentMarker([]byte("package x\nvar x = 1 //faultline:equivalent same result\n"), 2, "x.go")
 	require.NoError(t, err)
 	require.Equal(t, "same result", reason)
-	_, err = equivalentMarker([]byte("package x\nvar x = 1 //placebo:equivalent\n"), 2, "x.go")
-	require.EqualError(t, err, "x.go:2: //placebo:equivalent requires a reason")
+	_, err = equivalentMarker([]byte("package x\nvar x = 1 //faultline:equivalent\n"), 2, "x.go")
+	require.EqualError(t, err, "x.go:2: //faultline:equivalent requires a reason")
+}
+
+func TestEnumerateRecognizesEquivalentMarker(t *testing.T) {
+	root := t.TempDir()
+	source := "package fixture\nfunc Equivalent(n int) bool { return n > 0 } //faultline:equivalent callers require positive input\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "fixture.go"), []byte(source), 0o600))
+	mutants, _, err := Enumerate(root, []string{"."}, "")
+	require.NoError(t, err)
+	require.NotEmpty(t, mutants)
+	for _, mutant := range mutants {
+		require.Equal(t, "callers require positive input", mutant.AllowlistReason())
+	}
 }
 
 type assertions struct{}

@@ -1,3 +1,3 @@
-module github.com/chronark/placebo
+module github.com/chronark/faultline
 
 go 1.25

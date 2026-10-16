@@ -1,6 +1,6 @@
 version: 2
 
-project_name: placebo
+project_name: faultline
 
 before:
   hooks:
@@ -9,7 +9,7 @@ before:
 
 builds:
   - main: .
-    binary: placebo
+    binary: faultline
     env:
       - CGO_ENABLED=0
     goos:
@@ -24,7 +24,7 @@ builds:
 archives:
   - formats:
       - tar.gz
-    name_template: "placebo_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "faultline_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt
